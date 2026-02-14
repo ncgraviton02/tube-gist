@@ -1,12 +1,11 @@
 import type { APIRoute } from 'astro';
-import { YoutubeTranscript } from 'youtube-transcript';
 import Anthropic from '@anthropic-ai/sdk';
 
 export const POST: APIRoute = async ({ request, locals }) => {
   try {
     const { url } = await request.json();
     
-    if (!url || !url.includes('youtube.com/watch') && !url.includes('youtu.be/')) {
+    if (!url || (!url.includes('youtube.com/watch') && !url.includes('youtu.be/'))) {
       return new Response(JSON.stringify({
         error: 'Please provide a valid YouTube URL'
       }), {
@@ -15,7 +14,6 @@ export const POST: APIRoute = async ({ request, locals }) => {
       });
     }
 
-    // Extract video ID from URL
     const videoId = extractVideoId(url);
     if (!videoId) {
       return new Response(JSON.stringify({
@@ -26,34 +24,35 @@ export const POST: APIRoute = async ({ request, locals }) => {
       });
     }
 
-    // Get transcript
-    let transcript;
+    // Fetch the YouTube page to get title + caption tracks
+    const pageHtml = await fetchYouTubePage(videoId);
+    const videoTitle = extractTitle(pageHtml);
+    
+    // Extract transcript using innertube captions
+    let transcript: string;
     try {
-      const transcriptData = await YoutubeTranscript.fetchTranscript(videoId);
-      transcript = transcriptData.map(item => item.text).join(' ');
-    } catch (error) {
+      transcript = await fetchTranscript(pageHtml, videoId);
+    } catch (error: any) {
       return new Response(JSON.stringify({
-        error: 'Could not fetch transcript. Video may not have captions available.'
+        error: `Could not fetch transcript: ${error.message}`
       }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' }
       });
     }
 
-    if (!transcript || transcript.length < 100) {
+    if (!transcript || transcript.length < 50) {
       return new Response(JSON.stringify({
-        error: 'Transcript too short or unavailable'
+        error: 'Transcript too short or unavailable for this video'
       }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' }
       });
     }
-
-    // Get video title from YouTube (simple approach)
-    const videoTitle = await getVideoTitle(videoId);
 
     // Check for API key
-    if (!locals.runtime?.env?.ANTHROPIC_API_KEY) {
+    const apiKey = locals.runtime?.env?.ANTHROPIC_API_KEY;
+    if (!apiKey) {
       return new Response(JSON.stringify({
         error: 'Claude API key not configured'
       }), {
@@ -63,10 +62,9 @@ export const POST: APIRoute = async ({ request, locals }) => {
     }
 
     // Summarize with Claude
-    const anthropic = new Anthropic({
-      apiKey: locals.runtime.env.ANTHROPIC_API_KEY,
-    });
+    const anthropic = new Anthropic({ apiKey });
 
+    const truncatedTranscript = transcript.substring(0, 12000);
     const prompt = `Please analyze this YouTube video transcript and provide a newspaper-style summary with the following format:
 
 1. A compelling, engaging headline that captures the main topic
@@ -75,56 +73,45 @@ export const POST: APIRoute = async ({ request, locals }) => {
 4. Notable quotes if any are particularly striking
 
 Video Title: ${videoTitle}
-Transcript: ${transcript.substring(0, 8000)} ${transcript.length > 8000 ? '...' : ''}
+
+Transcript:
+${truncatedTranscript}${transcript.length > 12000 ? '\n[transcript truncated]' : ''}
 
 Please format your response as HTML that will fit well in a newspaper article layout. Use h3 tags for section headers, p tags for paragraphs, ul/li for bullet points, and blockquote for quotes. Do not include any markdown formatting.`;
 
     const response = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 2000,
-      messages: [
-        {
-          role: 'user',
-          content: prompt
-        }
-      ]
+      messages: [{ role: 'user', content: prompt }]
     });
 
     const summary = response.content[0].type === 'text' ? response.content[0].text : '';
 
-    // Store in D1 database (if available)
+    // Store in D1
     try {
       if (locals.runtime?.env?.DB) {
         const thumbnailUrl = `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
-        
         await locals.runtime.env.DB.prepare(
-          'INSERT INTO summaries (youtube_url, video_title, thumbnail_url, summary, created_at) VALUES (?, ?, ?, ?, ?)'
-        ).bind(
-          url,
-          videoTitle,
-          thumbnailUrl,
-          summary,
-          new Date().toISOString()
-        ).run();
+          'INSERT OR REPLACE INTO summaries (youtube_url, video_title, thumbnail_url, summary, created_at) VALUES (?, ?, ?, ?, ?)'
+        ).bind(url, videoTitle, thumbnailUrl, summary, new Date().toISOString()).run();
       }
     } catch (dbError) {
       console.error('Database error:', dbError);
-      // Continue even if DB save fails
     }
 
     return new Response(JSON.stringify({
       title: videoTitle,
-      summary: summary,
-      url: url
+      summary,
+      url
     }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' }
     });
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('Summarize error:', error);
     return new Response(JSON.stringify({
-      error: 'Internal server error'
+      error: error.message || 'Internal server error'
     }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
@@ -138,7 +125,6 @@ function extractVideoId(url: string): string | null {
     /(?:youtu\.be\/)([^&\n?#]+)/,
     /(?:youtube\.com\/embed\/)([^&\n?#]+)/
   ];
-  
   for (const pattern of patterns) {
     const match = url.match(pattern);
     if (match) return match[1];
@@ -146,18 +132,78 @@ function extractVideoId(url: string): string | null {
   return null;
 }
 
-async function getVideoTitle(videoId: string): Promise<string> {
-  try {
-    // Simple way to get title - scrape the page
-    const response = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      }
-    });
-    const html = await response.text();
-    const titleMatch = html.match(/<title>(.+?) - YouTube<\/title>/);
-    return titleMatch ? titleMatch[1] : 'YouTube Video';
-  } catch {
-    return 'YouTube Video';
+async function fetchYouTubePage(videoId: string): Promise<string> {
+  const response = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept-Language': 'en-US,en;q=0.9',
+    }
+  });
+  if (!response.ok) throw new Error('Failed to fetch YouTube page');
+  return response.text();
+}
+
+function extractTitle(html: string): string {
+  const match = html.match(/<title>(.+?)(?:\s*-\s*YouTube)?<\/title>/);
+  return match ? decodeHtmlEntities(match[1]) : 'YouTube Video';
+}
+
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#x27;/g, "'")
+    .replace(/&#x2F;/g, '/');
+}
+
+async function fetchTranscript(html: string, videoId: string): Promise<string> {
+  // Method 1: Extract captions URL from ytInitialPlayerResponse
+  const playerMatch = html.match(/ytInitialPlayerResponse\s*=\s*(\{.+?\});(?:var|const|let|<\/script>)/s);
+  if (!playerMatch) {
+    throw new Error('Could not find player response. Video may be private or unavailable.');
   }
+
+  let playerResponse: any;
+  try {
+    playerResponse = JSON.parse(playerMatch[1]);
+  } catch {
+    throw new Error('Failed to parse player response');
+  }
+
+  const captions = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+  if (!captions || captions.length === 0) {
+    throw new Error('No captions available for this video');
+  }
+
+  // Prefer English, fall back to first available, prefer non-auto-generated
+  let track = captions.find((t: any) => t.languageCode === 'en' && t.kind !== 'asr')
+    || captions.find((t: any) => t.languageCode === 'en')
+    || captions.find((t: any) => t.kind !== 'asr')
+    || captions[0];
+
+  const captionUrl = track.baseUrl;
+  if (!captionUrl) throw new Error('Caption URL not found');
+
+  // Fetch the XML transcript
+  const captionResponse = await fetch(captionUrl);
+  if (!captionResponse.ok) throw new Error('Failed to fetch captions');
+  const xml = await captionResponse.text();
+
+  // Parse XML transcript — extract text from <text> elements
+  const textSegments: string[] = [];
+  const regex = /<text[^>]*>(.*?)<\/text>/gs;
+  let match;
+  while ((match = regex.exec(xml)) !== null) {
+    const text = decodeHtmlEntities(match[1].replace(/<[^>]+>/g, '').trim());
+    if (text) textSegments.push(text);
+  }
+
+  if (textSegments.length === 0) {
+    throw new Error('Transcript is empty');
+  }
+
+  return textSegments.join(' ');
 }
