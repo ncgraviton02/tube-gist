@@ -1,0 +1,20 @@
+{
+  "name": "tube-gist",
+  "type": "module",
+  "version": "0.0.1",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro",
+    "deploy": "wrangler pages deploy dist",
+    "db:create": "wrangler d1 create tube-gist-db",
+    "db:migrate": "wrangler d1 migrations apply tube-gist-db"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.74.0",
+    "@astrojs/cloudflare": "^12.6.12",
+    "astro": "^5.17.1",
+    "youtube-transcript": "^1.2.1"
+  }
+}

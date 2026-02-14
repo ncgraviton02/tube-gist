@@ -1,0 +1,14 @@
+name = "tube-gist"
+main = "./dist/_worker.js"
+compatibility_date = "2024-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "tube-gist-db"
+database_id = "placeholder"
+
+[env.production]
+name = "tube-gist"
+
+[vars]
+ACCOUNT_ID = "d22f590383bda70e51109f18d2104ac2"

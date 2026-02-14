@@ -1,0 +1,148 @@
+---
+import Layout from '../components/Layout.astro';
+
+// Simple authentication check
+const cookies = Astro.request.headers.get('cookie') || '';
+const isAuthenticated = cookies.includes('tube-gist-auth=authenticated');
+
+if (!isAuthenticated) {
+  return Astro.redirect('/login');
+}
+---
+
+<Layout title="TubeGist - YouTube Video Summarizer">
+	<main class="container">
+		<header class="masthead">
+			<h1>TubeGist</h1>
+			<p class="tagline">Distilling YouTube videos into readable insights</p>
+		</header>
+
+		<section class="input-section">
+			<form id="summarize-form" class="url-form">
+				<div class="form-group">
+					<label for="youtube-url">YouTube Video URL</label>
+					<input 
+						type="url" 
+						id="youtube-url" 
+						name="url" 
+						placeholder="https://www.youtube.com/watch?v=..."
+						required
+					/>
+				</div>
+				<button type="submit" class="submit-btn">Analyze Video</button>
+			</form>
+		</section>
+
+		<section id="summary-section" class="summary-section" style="display: none;">
+			<article class="summary-article">
+				<div id="summary-content"></div>
+			</article>
+		</section>
+
+		<section class="history-section">
+			<h2>Recent Analysis</h2>
+			<div id="history-content" class="history-grid">
+				<p class="loading">Loading recent summaries...</p>
+			</div>
+		</section>
+	</main>
+
+	<script>
+		document.addEventListener('DOMContentLoaded', () => {
+			loadHistory();
+			
+			const form = document.getElementById('summarize-form');
+			form?.addEventListener('submit', handleSubmit);
+		});
+
+		async function handleSubmit(e) {
+			e.preventDefault();
+			const formData = new FormData(e.target);
+			const url = formData.get('url');
+			
+			if (!url) return;
+			
+			const submitBtn = document.querySelector('.submit-btn');
+			submitBtn.textContent = 'Analyzing...';
+			submitBtn.disabled = true;
+			
+			try {
+				const response = await fetch('/api/summarize', {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+					},
+					body: JSON.stringify({ url }),
+				});
+				
+				const result = await response.json();
+				
+				if (response.ok) {
+					displaySummary(result);
+					loadHistory(); // Refresh history
+				} else {
+					alert('Error: ' + result.error);
+				}
+			} catch (error) {
+				alert('Error analyzing video: ' + error.message);
+			} finally {
+				submitBtn.textContent = 'Analyze Video';
+				submitBtn.disabled = false;
+			}
+		}
+
+		function displaySummary(data) {
+			const summarySection = document.getElementById('summary-section');
+			const summaryContent = document.getElementById('summary-content');
+			
+			summaryContent.innerHTML = `
+				<header class="article-header">
+					<h1 class="headline">${data.title}</h1>
+					<div class="article-meta">
+						<time datetime="${new Date().toISOString()}">${new Date().toLocaleDateString('en-US', { 
+							year: 'numeric', 
+							month: 'long', 
+							day: 'numeric' 
+						})}</time>
+					</div>
+				</header>
+				
+				<div class="article-body">
+					${data.summary}
+				</div>
+			`;
+			
+			summarySection.style.display = 'block';
+			summarySection.scrollIntoView({ behavior: 'smooth' });
+		}
+
+		async function loadHistory() {
+			try {
+				const response = await fetch('/api/history');
+				const histories = await response.json();
+				
+				const historyContent = document.getElementById('history-content');
+				
+				if (histories.length === 0) {
+					historyContent.innerHTML = '<p class="empty">No summaries yet. Try analyzing your first video!</p>';
+					return;
+				}
+				
+				historyContent.innerHTML = histories.map(item => `
+					<div class="history-item" onclick="showSummary('${item.id}')">
+						<h3 class="history-title">${item.video_title}</h3>
+						<p class="history-date">${new Date(item.created_at).toLocaleDateString()}</p>
+						<p class="history-excerpt">${item.summary.substring(0, 120)}...</p>
+					</div>
+				`).join('');
+			} catch (error) {
+				document.getElementById('history-content').innerHTML = '<p class="error">Error loading history</p>';
+			}
+		}
+
+		function showSummary(id) {
+			// This could be enhanced to show full summary from history
+			console.log('Show summary:', id);
+		}
+	</script>
+</Layout>
