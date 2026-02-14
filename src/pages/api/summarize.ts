@@ -52,6 +52,16 @@ export const POST: APIRoute = async ({ request, locals }) => {
     // Get video title from YouTube (simple approach)
     const videoTitle = await getVideoTitle(videoId);
 
+    // Check for API key
+    if (!locals.runtime?.env?.ANTHROPIC_API_KEY) {
+      return new Response(JSON.stringify({
+        error: 'Claude API key not configured'
+      }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
     // Summarize with Claude
     const anthropic = new Anthropic({
       apiKey: locals.runtime.env.ANTHROPIC_API_KEY,
@@ -82,19 +92,21 @@ Please format your response as HTML that will fit well in a newspaper article la
 
     const summary = response.content[0].type === 'text' ? response.content[0].text : '';
 
-    // Store in D1 database
+    // Store in D1 database (if available)
     try {
-      const thumbnailUrl = `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
-      
-      await locals.runtime.env.DB.prepare(
-        'INSERT INTO summaries (youtube_url, video_title, thumbnail_url, summary, created_at) VALUES (?, ?, ?, ?, ?)'
-      ).bind(
-        url,
-        videoTitle,
-        thumbnailUrl,
-        summary,
-        new Date().toISOString()
-      ).run();
+      if (locals.runtime?.env?.DB) {
+        const thumbnailUrl = `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
+        
+        await locals.runtime.env.DB.prepare(
+          'INSERT INTO summaries (youtube_url, video_title, thumbnail_url, summary, created_at) VALUES (?, ?, ?, ?, ?)'
+        ).bind(
+          url,
+          videoTitle,
+          thumbnailUrl,
+          summary,
+          new Date().toISOString()
+        ).run();
+      }
     } catch (dbError) {
       console.error('Database error:', dbError);
       // Continue even if DB save fails
