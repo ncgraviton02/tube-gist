@@ -1,16 +1,8 @@
 name = "tube-gist"
-main = "./dist/_worker.js"
 compatibility_date = "2024-01-01"
 pages_build_output_dir = "dist"
 
-# D1 Database (to be configured after deployment)
-# [[d1_databases]]
-# binding = "DB"
-# database_name = "tube-gist-db"
-# database_id = "to-be-filled"
-
-[env.production]
-name = "tube-gist"
-
-[vars]
-ACCOUNT_ID = "d22f590383bda70e51109f18d2104ac2"
+[[d1_databases]]
+binding = "DB"
+database_name = "tube-gist-db"
+database_id = "86552a09-0e91-406c-8ce5-ccf38d26a4e9"

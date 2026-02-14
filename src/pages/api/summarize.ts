@@ -80,7 +80,7 @@ Transcript: ${transcript.substring(0, 8000)} ${transcript.length > 8000 ? '...' 
 Please format your response as HTML that will fit well in a newspaper article layout. Use h3 tags for section headers, p tags for paragraphs, ul/li for bullet points, and blockquote for quotes. Do not include any markdown formatting.`;
 
     const response = await anthropic.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
+      model: 'claude-sonnet-4-20250514',
       max_tokens: 2000,
       messages: [
         {
