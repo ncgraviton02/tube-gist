@@ -1,6 +1,7 @@
 name = "tube-gist"
 main = "./dist/_worker.js"
 compatibility_date = "2024-01-01"
+pages_build_output_dir = "dist"
 
 # D1 Database (to be configured after deployment)
 # [[d1_databases]]

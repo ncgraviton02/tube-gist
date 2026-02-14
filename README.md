@@ -1,43 +1,69 @@
-# Astro Starter Kit: Minimal
+# TubeGist - YouTube Video Summarizer
 
-```sh
-npm create astro@latest -- --template minimal
+A newspaper-style web application that transforms YouTube videos into elegant, readable summaries using AI.
+
+## Features
+
+- **Clean Input**: Simply paste any YouTube URL
+- **AI-Powered Analysis**: Uses Claude API to extract key insights from video transcripts
+- **Newspaper Aesthetic**: Beautiful, editorial design inspired by classic print media
+- **Smart History**: Tracks and displays your previous summaries
+- **Secure Access**: Simple password protection for private use
+
+## Design Philosophy
+
+TubeGist presents video summaries like newspaper articles, with:
+- Compelling headlines that capture the essence
+- Key takeaways in digestible bullet points  
+- Detailed analysis in readable paragraphs
+- Notable quotes when available
+
+## Typography & Style
+
+- **Headlines**: Playfair Display (elegant serif)
+- **Body Text**: Libre Baskerville (readable serif)
+- **UI Elements**: Source Sans 3 (clean sans-serif)
+- **Colors**: Muted editorial palette
+- **Layout**: Clean, spacious, professional
+
+## Tech Stack
+
+- **Frontend**: Astro (SSG/SSR)
+- **Hosting**: Cloudflare Pages
+- **Database**: Cloudflare D1
+- **AI**: Anthropic Claude API
+- **Styling**: Custom CSS with newspaper aesthetics
+
+## Quick Start
+
+```bash
+npm install
+npm run dev
 ```
 
-> 🧑‍🚀 **Seasoned astronaut?** Delete this file. Have fun!
+Visit `http://localhost:4321` and use password: `yoyoballusingh`
 
-## 🚀 Project Structure
+## Deployment
 
-Inside of your Astro project, you'll see the following folders and files:
+See [DEPLOY.md](./DEPLOY.md) for complete deployment instructions to Cloudflare Pages.
 
-```text
-/
-├── public/
-├── src/
-│   └── pages/
-│       └── index.astro
-└── package.json
+## Project Structure
+
+```
+src/
+├── components/
+│   └── Layout.astro          # Main layout with typography
+├── pages/
+│   ├── index.astro          # Main app with URL input
+│   ├── login.astro          # Password authentication
+│   └── api/
+│       ├── auth.ts          # Authentication endpoint
+│       ├── history.ts       # Summaries history
+│       └── summarize.ts     # YouTube processing
+└── migrations/
+    └── 0001_create_summaries.sql
 ```
 
-Astro looks for `.astro` or `.md` files in the `src/pages/` directory. Each page is exposed as a route based on its file name.
+## License
 
-There's nothing special about `src/components/`, but that's where we like to put any Astro/React/Vue/Svelte/Preact components.
-
-Any static assets, like images, can be placed in the `public/` directory.
-
-## 🧞 Commands
-
-All commands are run from the root of the project, from a terminal:
-
-| Command                   | Action                                           |
-| :------------------------ | :----------------------------------------------- |
-| `npm install`             | Installs dependencies                            |
-| `npm run dev`             | Starts local dev server at `localhost:4321`      |
-| `npm run build`           | Build your production site to `./dist/`          |
-| `npm run preview`         | Preview your build locally, before deploying     |
-| `npm run astro ...`       | Run CLI commands like `astro add`, `astro check` |
-| `npm run astro -- --help` | Get help using the Astro CLI                     |
-
-## 👀 Want to learn more?
-
-Feel free to check [our documentation](https://docs.astro.build) or jump into our [Discord server](https://astro.build/chat).
+MIT
