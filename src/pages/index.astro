@@ -1,12 +1,11 @@
 ---
 import Layout from '../components/Layout.astro';
 
-// Simple authentication check
 const cookies = Astro.request.headers.get('cookie') || '';
 const isAuthenticated = cookies.includes('tube-gist-auth=authenticated');
 
 if (!isAuthenticated) {
-  return Astro.redirect('/login');
+	return Astro.redirect('/login');
 }
 ---
 
@@ -31,6 +30,7 @@ if (!isAuthenticated) {
 				</div>
 				<button type="submit" class="submit-btn">Analyze Video</button>
 			</form>
+			<div id="status-msg" class="status-msg" style="display:none;"></div>
 		</section>
 
 		<section id="summary-section" class="summary-section" style="display: none;">
@@ -50,41 +50,135 @@ if (!isAuthenticated) {
 	<script>
 		document.addEventListener('DOMContentLoaded', () => {
 			loadHistory();
-			
-			const form = document.getElementById('summarize-form');
-			form?.addEventListener('submit', handleSubmit);
+			document.getElementById('summarize-form')?.addEventListener('submit', handleSubmit);
 		});
+
+		function setStatus(msg, isError = false) {
+			const el = document.getElementById('status-msg');
+			if (!el) return;
+			el.textContent = msg;
+			el.style.display = msg ? 'block' : 'none';
+			el.style.color = isError ? '#c0392b' : '#555';
+		}
+
+		function extractVideoId(url) {
+			const patterns = [
+				/(?:youtube\.com\/watch\?v=)([^&\n?#]+)/,
+				/(?:youtu\.be\/)([^&\n?#]+)/,
+				/(?:youtube\.com\/embed\/)([^&\n?#]+)/
+			];
+			for (const p of patterns) {
+				const m = url.match(p);
+				if (m) return m[1];
+			}
+			return null;
+		}
+
+		async function fetchTranscriptClientSide(videoId) {
+			// Fetch the YouTube page from the user's browser
+			// We use a hidden iframe + postMessage approach won't work due to X-Frame-Options
+			// Instead, we use the YouTube oEmbed for title and innertube API for transcript
+			
+			// Step 1: Get video info + caption tracks by fetching the watch page
+			setStatus('Fetching video page...');
+			const pageResp = await fetch(`https://www.youtube.com/watch?v=${videoId}`);
+			const html = await pageResp.text();
+
+			// Extract title
+			const titleMatch = html.match(/<title>(.+?)(?:\s*-\s*YouTube)?<\/title>/);
+			const videoTitle = titleMatch ? titleMatch[1]
+				.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+				.replace(/&quot;/g, '"').replace(/&#39;/g, "'") : 'YouTube Video';
+
+			// Extract caption tracks from ytInitialPlayerResponse
+			const playerMatch = html.match(/ytInitialPlayerResponse\s*=\s*(\{.+?\});(?:var|const|let|<\/script>)/s);
+			if (!playerMatch) throw new Error('Could not find player data. Video may be private or unavailable.');
+			
+			const player = JSON.parse(playerMatch[1]);
+			const captions = player?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+			if (!captions || captions.length === 0) throw new Error('No captions available for this video.');
+
+			// Pick best track: prefer English non-auto, then English auto, then first
+			let track = captions.find(t => t.languageCode === 'en' && t.kind !== 'asr')
+				|| captions.find(t => t.languageCode === 'en')
+				|| captions[0];
+
+			// Fetch the XML captions
+			setStatus('Fetching transcript...');
+			const capResp = await fetch(track.baseUrl);
+			const xml = await capResp.text();
+
+			if (!xml || xml.length === 0) {
+				// Fallback: try with fmt=json3
+				const jsonResp = await fetch(track.baseUrl + '&fmt=json3');
+				const jsonText = await jsonResp.text();
+				if (jsonText && jsonText.length > 0) {
+					const jsonData = JSON.parse(jsonText);
+					const segments = jsonData?.events?.filter(e => e.segs)?.map(e => 
+						e.segs.map(s => s.utf8).join('')
+					) || [];
+					return { transcript: segments.join(' ').trim(), videoTitle };
+				}
+				throw new Error('Could not fetch transcript. YouTube may be blocking server requests - try a different video.');
+			}
+
+			// Parse XML
+			const segments = [];
+			const regex = /<text[^>]*>(.*?)<\/text>/gs;
+			let match;
+			while ((match = regex.exec(xml)) !== null) {
+				const text = match[1].replace(/<[^>]+>/g, '').trim()
+					.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+					.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&#x27;/g, "'");
+				if (text) segments.push(text);
+			}
+
+			if (segments.length === 0) throw new Error('Transcript is empty.');
+			return { transcript: segments.join(' '), videoTitle };
+		}
 
 		async function handleSubmit(e) {
 			e.preventDefault();
-			const formData = new FormData(e.target);
-			const url = formData.get('url');
-			
+			const url = new FormData(e.target).get('url');
 			if (!url) return;
-			
+
+			const videoId = extractVideoId(url);
+			if (!videoId) {
+				setStatus('Invalid YouTube URL', true);
+				return;
+			}
+
 			const submitBtn = document.querySelector('.submit-btn');
 			submitBtn.textContent = 'Analyzing...';
 			submitBtn.disabled = true;
-			
+			setStatus('');
+
 			try {
+				// Extract transcript client-side (browser has residential IP, not blocked by YT)
+				const { transcript, videoTitle } = await fetchTranscriptClientSide(videoId);
+				
+				if (!transcript || transcript.length < 50) {
+					throw new Error('Transcript too short or unavailable.');
+				}
+
+				setStatus('Generating summary with Claude...');
+
 				const response = await fetch('/api/summarize', {
 					method: 'POST',
-					headers: {
-						'Content-Type': 'application/json',
-					},
-					body: JSON.stringify({ url }),
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ url, transcript, videoTitle }),
 				});
-				
+
 				const result = await response.json();
-				
 				if (response.ok) {
+					setStatus('');
 					displaySummary(result);
-					loadHistory(); // Refresh history
+					loadHistory();
 				} else {
-					alert('Error: ' + result.error);
+					setStatus('Error: ' + result.error, true);
 				}
 			} catch (error) {
-				alert('Error analyzing video: ' + error.message);
+				setStatus('Error: ' + error.message, true);
 			} finally {
 				submitBtn.textContent = 'Analyze Video';
 				submitBtn.disabled = false;
@@ -100,16 +194,11 @@ if (!isAuthenticated) {
 					<h1 class="headline">${data.title}</h1>
 					<div class="article-meta">
 						<time datetime="${new Date().toISOString()}">${new Date().toLocaleDateString('en-US', { 
-							year: 'numeric', 
-							month: 'long', 
-							day: 'numeric' 
+							year: 'numeric', month: 'long', day: 'numeric' 
 						})}</time>
 					</div>
 				</header>
-				
-				<div class="article-body">
-					${data.summary}
-				</div>
+				<div class="article-body">${data.summary}</div>
 			`;
 			
 			summarySection.style.display = 'block';
@@ -120,29 +209,22 @@ if (!isAuthenticated) {
 			try {
 				const response = await fetch('/api/history');
 				const histories = await response.json();
+				const el = document.getElementById('history-content');
 				
-				const historyContent = document.getElementById('history-content');
-				
-				if (histories.length === 0) {
-					historyContent.innerHTML = '<p class="empty">No summaries yet. Try analyzing your first video!</p>';
+				if (!histories || histories.length === 0) {
+					el.innerHTML = '<p class="empty">No summaries yet. Try analyzing your first video!</p>';
 					return;
 				}
 				
-				historyContent.innerHTML = histories.map(item => `
-					<div class="history-item" onclick="showSummary('${item.id}')">
+				el.innerHTML = histories.map(item => `
+					<div class="history-item">
 						<h3 class="history-title">${item.video_title}</h3>
 						<p class="history-date">${new Date(item.created_at).toLocaleDateString()}</p>
-						<p class="history-excerpt">${item.summary.substring(0, 120)}...</p>
 					</div>
 				`).join('');
 			} catch (error) {
-				document.getElementById('history-content').innerHTML = '<p class="error">Error loading history</p>';
+				document.getElementById('history-content').innerHTML = '<p class="empty">History unavailable</p>';
 			}
-		}
-
-		function showSummary(id) {
-			// This could be enhanced to show full summary from history
-			console.log('Show summary:', id);
 		}
 	</script>
 </Layout>
